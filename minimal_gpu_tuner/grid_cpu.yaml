@@ -1,0 +1,15 @@
+tree_method: [hist]
+
+objective: [rank:pairwise]
+eval_metric: [ndcg@20]
+
+max_depth: [3, 4, 5]
+min_child_weight: [1.0, 5.0]
+subsample: [0.6, 0.8]
+colsample_bytree: [0.6, 0.8]
+eta: [0.03, 0.05]
+num_boost_round: [600]
+lambda: [1.0, 10.0]
+gamma: [0.0, 1.0]
+
+
