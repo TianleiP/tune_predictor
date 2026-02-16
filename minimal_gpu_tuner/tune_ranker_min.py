@@ -5,6 +5,7 @@ import itertools
 import json
 import time
 from datetime import datetime
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
@@ -12,6 +13,56 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 import yaml
+import platform
+import sys
+
+
+def _env_fingerprint() -> Dict[str, Any]:
+    bi = {}
+    try:
+        bi = dict(xgb.build_info())
+    except Exception:
+        bi = {}
+    return {
+        "python": sys.version.split()[0],
+        "platform": platform.platform(),
+        "xgboost": getattr(xgb, "__version__", "unknown"),
+        "xgboost_build_info": {
+            # keep a small subset that's most useful
+            "USE_CUDA": bi.get("USE_CUDA"),
+            "USE_OPENMP": bi.get("USE_OPENMP"),
+            "USE_DLOPEN_NCCL": bi.get("USE_DLOPEN_NCCL"),
+        },
+        "pandas": getattr(pd, "__version__", "unknown"),
+        "numpy": getattr(np, "__version__", "unknown"),
+    }
+
+
+def _dataset_fingerprint(df: pd.DataFrame, *, target_col: str) -> Dict[str, Any]:
+    """
+    Create a lightweight fingerprint so two machines can confirm they're tuning the same dataset.
+    Assumes df is already cleaned and includes date/ticker/target_col.
+    """
+    d = df.copy()
+    d["date"] = pd.to_datetime(d["date"], errors="coerce")
+    d = d.dropna(subset=["date", "ticker", target_col]).sort_values(["date", "ticker"]).reset_index(drop=True)
+
+    cols_sorted = sorted(map(str, d.columns.tolist()))
+    columns_sha1 = hashlib.sha1(("\n".join(cols_sorted)).encode("utf-8")).hexdigest()
+
+    sample = d[["date", "ticker", target_col]].head(2000).copy()
+    sample["date"] = sample["date"].dt.strftime("%Y-%m-%d")
+    sample_sha1 = hashlib.sha1(sample.to_csv(index=False).encode("utf-8")).hexdigest()
+
+    return {
+        "rows": int(len(d)),
+        "cols": int(len(d.columns)),
+        "date_min": str(d["date"].min().date()) if len(d) else None,
+        "date_max": str(d["date"].max().date()) if len(d) else None,
+        "tickers": int(d["ticker"].nunique()) if len(d) else 0,
+        "columns_sha1": columns_sha1,
+        "sample_sha1": sample_sha1,
+    }
 
 
 def _read_grid(path: str) -> Dict[str, List[Any]]:
@@ -283,7 +334,20 @@ def main() -> int:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = Path(args.out) if args.out else (Path("artifacts") / "logs" / f"tune_ranker_{ts}.csv")
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path = out_path.with_suffix(".meta.json")
 
+    meta = {
+        "created_at": ts,
+        "env": _env_fingerprint(),
+        "args": vars(args),
+    }
+    meta["dataset"] = {
+        "path": str(ds_path),
+        "fingerprint": _dataset_fingerprint(df, target_col=tgt),
+    }
+    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+
+    print(f"meta={meta_path}")
     print(f"dataset={ds_path} rows={len(df)} train={len(tr)} valid={len(va)} feats={len(feats)} target={tgt}")
     print(f"trials={len(combos)} grid_keys={list(grid.keys())}")
 
