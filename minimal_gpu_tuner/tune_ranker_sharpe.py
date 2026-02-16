@@ -34,6 +34,17 @@ from minimal_gpu_tuner.tune_ranker_min import (
 )
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
+def _write_yaml(path: Path, obj: dict) -> None:
+    _atomic_write_text(path, yaml.safe_dump(obj, sort_keys=False))
+
+
 def _read_grid(path: str) -> Dict[str, List[Any]]:
     p = Path(path)
     if not p.exists():
@@ -102,6 +113,17 @@ def main() -> int:
     ap.add_argument("--early-stopping-rounds", type=int, default=50)
     ap.add_argument("--max-trials", type=int, default=0)
     ap.add_argument("--out", default="", help="Output CSV path (default: artifacts/logs/tune_sharpe_<ts>.csv)")
+    ap.add_argument(
+        "--save-best-model",
+        default="",
+        help="If set, save the best model to this path (overwritten whenever a new best is found).",
+    )
+    ap.add_argument(
+        "--stop-at-sharpe",
+        type=float,
+        default=None,
+        help="If set, stop the search early once best_sharpe >= this value (still writes CSV/meta).",
+    )
     args = ap.parse_args()
 
     ds_path = Path(args.dataset)
@@ -169,6 +191,8 @@ def main() -> int:
 
     results: List[Dict[str, Any]] = []
     best = None
+    best_saved = False
+    best_model_path = Path(str(args.save_best_model)) if str(args.save_best_model).strip() else None
 
     for i, ov in enumerate(combos, start=1):
         t0 = time.time()
@@ -237,6 +261,37 @@ def main() -> int:
             key = (float(r["sharpe"]), float(r.get("cum_return", -np.inf)))
             if best is None or key > best[0]:
                 best = (key, r)
+                # Save immediately when a new best is found (eliminates retrain mismatch).
+                if best_model_path is not None:
+                    best_model_path.parent.mkdir(parents=True, exist_ok=True)
+                    booster.save_model(str(best_model_path))
+                    meta_path = best_model_path.with_suffix(".meta.yaml")
+                    meta = {
+                        "created_at": ts,
+                        "task": "rank",
+                        "source": "minimal_gpu_tuner.tune_ranker_sharpe",
+                        "dataset_path": str(ds_path),
+                        "target_col": tgt,
+                        "feature_cols": list(feats),
+                        "selection_metric": {"primary": "sharpe", "secondary": "cum_return"},
+                        "best_so_far": {
+                            "trial": int(r.get("trial", -1)),
+                            "sharpe": float(r.get("sharpe")),
+                            "cum_return": float(r.get("cum_return")),
+                            "max_drawdown": float(r.get("max_drawdown")),
+                            "avg_turnover": float(r.get("avg_turnover")),
+                        },
+                        "xgb_params": dict(params),
+                        "num_boost_round": int(num_round),
+                        "best_iteration": int(r.get("best_iteration", -1)),
+                    }
+                    _write_yaml(meta_path, meta)
+                    best_saved = True
+
+                # Optional early stop once we hit the target Sharpe
+                if args.stop_at_sharpe is not None and float(r["sharpe"]) >= float(args.stop_at_sharpe):
+                    print(f"[early_stop] reached sharpe={float(r['sharpe']):.3f} >= {float(args.stop_at_sharpe):.3f}")
+                    break
 
         if i % 10 == 0 or i == 1 or i == len(combos):
             if best:
@@ -249,6 +304,12 @@ def main() -> int:
     if best:
         print("best_overrides=", best[1]["overrides"])
         print(f"best_sharpe={best[1]['sharpe']:.3f} best_cum_return={best[1]['cum_return']:.3f}")
+    if best_model_path is not None:
+        if best_saved:
+            print(f"saved_best_model={best_model_path}")
+            print(f"saved_best_meta={best_model_path.with_suffix('.meta.yaml')}")
+        else:
+            print("saved_best_model=<none> (no successful trials)")
     return 0
 
 

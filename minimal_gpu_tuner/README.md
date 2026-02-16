@@ -84,4 +84,47 @@ python minimal_gpu_tuner/tune_ranker_sharpe.py \
   --early-stopping-rounds 50
 ```
 
+### Save the best model immediately (no need to wait for the full grid)
+
+This overwrites `artifacts/models/xgb_rank_best_sharpe.json` each time a better Sharpe is found:
+
+```bash
+python minimal_gpu_tuner/tune_ranker_sharpe.py \
+  --dataset data/processed/dataset_champion_rank_5d_longmom_meta_nosize.parquet \
+  --target-col future_return_5d \
+  --grid minimal_gpu_tuner/grid_gpu.yaml \
+  --seed 42 \
+  --train-start 2020-01-01 \
+  --valid-start 2024-01-01 \
+  --purge-days 10 \
+  --bins 5 \
+  --topn 20 \
+  --hold-days 5 \
+  --cost-bps 5 \
+  --price-col adj_close \
+  --early-stopping-rounds 50 \
+  --save-best-model artifacts/models/xgb_rank_best_sharpe.json
+```
+
+Optional early stop (example: stop once Sharpe reaches 2.20):
+
+```bash
+python minimal_gpu_tuner/tune_ranker_sharpe.py \
+  --dataset data/processed/dataset_champion_rank_5d_longmom_meta_nosize.parquet \
+  --target-col future_return_5d \
+  --grid minimal_gpu_tuner/grid_gpu.yaml \
+  --seed 42 \
+  --train-start 2020-01-01 \
+  --valid-start 2024-01-01 \
+  --purge-days 10 \
+  --bins 5 \
+  --topn 20 \
+  --hold-days 5 \
+  --cost-bps 5 \
+  --price-col adj_close \
+  --early-stopping-rounds 50 \
+  --save-best-model artifacts/models/xgb_rank_best_sharpe.json \
+  --stop-at-sharpe 2.20
+```
+
 
