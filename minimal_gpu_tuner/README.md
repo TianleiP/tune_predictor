@@ -31,6 +31,7 @@ python minimal_gpu_tuner/tune_ranker_min.py \
   --dataset /path/to/dataset_champion_rank_5d_longmom_meta_nosize.parquet \
   --target-col future_return_5d \
   --grid minimal_gpu_tuner/grid_gpu.yaml \
+  --seed 42 \
   --train-start 2020-01-01 \
   --valid-start 2024-01-01 \
   --purge-days 10 \
@@ -57,6 +58,7 @@ python minimal_gpu_tuner/tune_ranker_min.py \
 ```
 
 ## Notes
+- By default, this tuner **drops raw OHLCV level columns** (open/high/low/close/adj_close/volume) to match the main project’s feature policy. To include them, add `--include-ohlcv-levels`.
 - If your machine sleeps, training stops. On servers, use `tmux` / `screen` / `nohup`.
 - GPU requires a CUDA-capable NVIDIA GPU and an XGBoost build with CUDA enabled.
 

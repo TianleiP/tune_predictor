@@ -149,6 +149,19 @@ def _pick_features(df: pd.DataFrame) -> List[str]:
     return feats
 
 
+def _apply_feature_policy(feature_cols: List[str], *, include_ohlcv_levels: bool) -> List[str]:
+    """
+    Match the main repo policy: raw OHLCV *levels* can leak ticker identity / scale and hurt CS ranking.
+    """
+    if include_ohlcv_levels:
+        return feature_cols
+    drop = {"open", "high", "low", "close", "adj_close", "volume"}
+    out = [c for c in feature_cols if c not in drop]
+    if not out:
+        raise RuntimeError("feature policy dropped all features")
+    return out
+
+
 def _make_groups(dates: pd.Series) -> np.ndarray:
     sizes = pd.Series(dates).groupby(dates, sort=True).size().values
     return sizes.astype(int)
@@ -278,6 +291,12 @@ def main() -> int:
     ap.add_argument("--dataset", required=True, help="Parquet panel with date/ticker/features/target")
     ap.add_argument("--target-col", required=True, help="e.g. future_return_5d")
     ap.add_argument("--grid", required=True, help="YAML grid with xgboost params (lists)")
+    ap.add_argument(
+        "--include-ohlcv-levels",
+        action="store_true",
+        help="If set, include raw OHLCV level columns (open/high/low/close/adj_close/volume) as features.",
+    )
+    ap.add_argument("--seed", type=int, default=42, help="Default XGBoost seed if not specified by the grid")
     ap.add_argument("--train-start", default="2020-01-01")
     ap.add_argument("--valid-start", default="2024-01-01")
     ap.add_argument("--valid-end", default="")
@@ -309,6 +328,7 @@ def main() -> int:
         tr, va = _purge_embargo(tr, va, purge_days=int(args.purge_days), embargo_days=int(args.embargo_days))
 
     feats = _pick_features(df)
+    feats = _apply_feature_policy(feats, include_ohlcv_levels=bool(args.include_ohlcv_levels))
     X_tr = tr[feats].replace([np.inf, -np.inf], np.nan)
     X_va = va[feats].replace([np.inf, -np.inf], np.nan)
 
@@ -365,6 +385,10 @@ def main() -> int:
             # alias lambda -> reg_lambda
             if "reg_lambda" in params and "lambda" not in params:
                 params["lambda"] = float(params.pop("reg_lambda"))
+
+            # Ensure deterministic-ish behavior unless grid overrides it.
+            params.setdefault("seed", int(args.seed))
+            params.setdefault("nthread", -1)
 
             booster = xgb.train(
                 params=params,
