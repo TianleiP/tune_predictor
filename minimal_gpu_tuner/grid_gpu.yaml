@@ -1,6 +1,6 @@
-tree_method: [gpu_hist]
+# XGBoost >=2.0: GPU is controlled via `device: cuda`; use `hist` (gpu_hist is deprecated).
+tree_method: [hist]
 device: [cuda]
-predictor: [gpu_predictor]
 
 objective: [rank:pairwise]
 eval_metric: [ndcg@20]
