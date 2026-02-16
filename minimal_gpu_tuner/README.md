@@ -62,4 +62,26 @@ python minimal_gpu_tuner/tune_ranker_min.py \
 - If your machine sleeps, training stops. On servers, use `tmux` / `screen` / `nohup`.
 - GPU requires a CUDA-capable NVIDIA GPU and an XGBoost build with CUDA enabled.
 
+## 4) Tune by portfolio Sharpe (recommended for “Top-20 trading”)
+
+This runs the exact same *overlapping Top‑N* portfolio mechanics (hold_days overlap + transaction costs)
+for each hyperparameter set, and selects the best by **Sharpe**.
+
+```bash
+python minimal_gpu_tuner/tune_ranker_sharpe.py \
+  --dataset data/processed/dataset_champion_rank_5d_longmom_meta_nosize.parquet \
+  --target-col future_return_5d \
+  --grid minimal_gpu_tuner/grid_gpu.yaml \
+  --seed 42 \
+  --train-start 2020-01-01 \
+  --valid-start 2024-01-01 \
+  --purge-days 10 \
+  --bins 5 \
+  --topn 20 \
+  --hold-days 5 \
+  --cost-bps 5 \
+  --price-col adj_close \
+  --early-stopping-rounds 50
+```
+
 
