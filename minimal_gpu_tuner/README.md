@@ -64,8 +64,8 @@ python minimal_gpu_tuner/tune_ranker_min.py \
 
 ## 4) Tune by portfolio Sharpe (recommended for “Top-20 trading”)
 
-This runs the exact same *overlapping Top‑N* portfolio mechanics (hold_days overlap + transaction costs)
-for each hyperparameter set, and selects the best by **Sharpe**.
+This runs the **official** *overlapping Top‑N* portfolio mechanics (same as the main repo’s
+`src/backtest/overlap_topn.py`) for each hyperparameter set, and selects the best by **Sharpe**.
 
 ```bash
 python minimal_gpu_tuner/tune_ranker_sharpe.py \

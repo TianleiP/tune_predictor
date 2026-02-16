@@ -13,7 +13,15 @@ import pandas as pd
 import xgboost as xgb
 import yaml
 
-from minimal_gpu_tuner.backtest_min import build_ret_matrix, overlap_topn_backtest_from_scores
+import sys
+
+# Make `minimal_gpu_tuner.*` imports work no matter the current working directory.
+_THIS_DIR = Path(__file__).resolve().parent
+_PKG_ROOT = _THIS_DIR.parent  # tune_predictor/
+if str(_PKG_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PKG_ROOT))
+
+from minimal_gpu_tuner.overlap_topn_official import run_overlap_topn_backtest
 from minimal_gpu_tuner.tune_ranker_min import (
     _apply_feature_policy,
     _dataset_fingerprint,
@@ -87,6 +95,9 @@ def main() -> int:
     ap.add_argument("--topn", type=int, default=20)
     ap.add_argument("--hold-days", type=int, default=5)
     ap.add_argument("--cost-bps", type=float, default=5.0)
+    ap.add_argument("--slippage-k", type=float, default=0.0)
+    ap.add_argument("--slippage-cap-bps", type=float, default=50.0)
+    ap.add_argument("--liq-min-logdv", type=float, default=None)
     ap.add_argument("--price-col", default="adj_close")
     ap.add_argument("--early-stopping-rounds", type=int, default=50)
     ap.add_argument("--max-trials", type=int, default=0)
@@ -124,10 +135,12 @@ def main() -> int:
     dtr.set_group(g_tr)
     dva.set_group(g_va)
 
-    # Precompute returns matrix on validation panel (same dates/tickers axes for all trials)
-    if str(args.price_col) not in df.columns:
-        raise RuntimeError(f"dataset missing price_col: {args.price_col}")
-    ret_mat, dates, tickers, _ = build_ret_matrix(va, price_col=str(args.price_col))
+    # Price/scored panels for official backtest
+    price_col = str(args.price_col)
+    if price_col not in df.columns:
+        raise RuntimeError(f"dataset missing price_col: {price_col}")
+    price_cols = [c for c in ["date", "ticker", price_col, "amihud_illiq", "log_dollar_volume"] if c in va.columns]
+    price_panel = va[price_cols].copy()
 
     grid = _read_grid(args.grid)
     combos = list(_iter_grid(grid))
@@ -189,15 +202,20 @@ def main() -> int:
 
             va_scored = va[["date", "ticker"]].copy()
             va_scored["score"] = score
-            score_mat = _score_matrix_for_valid(va_scored, dates=dates, tickers=tickers, score_col="score")
+            scored_cols = [c for c in ["date", "ticker", "score", "amihud_illiq", "log_dollar_volume"] if c in va.columns]
+            scored_panel = va[scored_cols].copy()
+            scored_panel["score"] = score
 
-            _, summ = overlap_topn_backtest_from_scores(
-                score_mat=score_mat,
-                ret_mat=ret_mat,
-                dates=dates,
+            _, summ = run_overlap_topn_backtest(
+                scored_panel=scored_panel,
+                price_panel=price_panel,
                 top_n=int(args.topn),
                 hold_days=int(args.hold_days),
                 cost_bps=float(args.cost_bps),
+                slippage_k=float(args.slippage_k),
+                slippage_cap_bps=float(args.slippage_cap_bps),
+                liquidity_min_log_dollar_volume=args.liq_min_logdv,
+                price_col=price_col,
             )
 
             r.update(
