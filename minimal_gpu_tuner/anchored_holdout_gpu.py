@@ -264,7 +264,24 @@ def main() -> int:
     )
 
     best_it = int(getattr(booster, "best_iteration", -1))
-    it_range = (0, best_it + 1) if best_it >= 0 else None
+    best_rounds = (best_it + 1) if best_it >= 0 else int(num_round)
+    if best_rounds <= 0:
+        best_rounds = int(num_round)
+
+    # Retrain on FULL anchored train window using best_rounds (more realistic for deployment)
+    y_tr = _to_relevance_bins(tr, date_col="date", target_col=tgt, bins=bins)
+    g_tr = _make_groups(tr["date"])
+    X_tr = tr[feats].replace([np.inf, -np.inf], np.nan)
+    dtr = xgb.DMatrix(X_tr, label=y_tr)
+    dtr.set_group(g_tr)
+    booster_full = xgb.train(
+        params=params,
+        dtrain=dtr,
+        num_boost_round=int(best_rounds),
+        evals=[],
+        verbose_eval=False,
+    )
+    it_range = None  # full model already trained to fixed rounds
 
     # For tuning w: predict on last `weight_tune_months` of training (subset of tr_eval)
     wt_months = int(args.weight_tune_months)
@@ -275,7 +292,7 @@ def main() -> int:
 
     X_tune = tune[feats].replace([np.inf, -np.inf], np.nan)
     dtune = xgb.DMatrix(X_tune)
-    tune["model_score"] = booster.predict(dtune, iteration_range=it_range) if it_range else booster.predict(dtune)
+    tune["model_score"] = booster_full.predict(dtune)
     tune["mom_z"] = _zscore_by_date(tune, "mom_12_1")
     tune["model_z"] = _zscore_by_date(tune, "model_score")
 
@@ -309,7 +326,7 @@ def main() -> int:
     X_ho = ho[feats].replace([np.inf, -np.inf], np.nan)
     dho = xgb.DMatrix(X_ho)
     ho = ho.copy()
-    ho["model_score"] = booster.predict(dho, iteration_range=it_range) if it_range else booster.predict(dho)
+    ho["model_score"] = booster_full.predict(dho)
     ho["mom_z"] = _zscore_by_date(ho, "mom_12_1")
     ho["model_z"] = _zscore_by_date(ho, "model_score")
     ho["blend_score"] = float(best_w) * ho["mom_z"] + (1.0 - float(best_w)) * ho["model_z"]
@@ -407,6 +424,7 @@ def main() -> int:
         "xgb_params": params,
         "num_boost_round": int(num_round),
         "best_iteration": int(best_it),
+        "best_rounds_used": int(best_rounds),
         "blend": {"weights": weights, "best_w": float(best_w), "weight_tune_start": str(pd.to_datetime(tune_start).strftime("%Y-%m-%d"))},
         "paths": {"out_csv": str(out_path), "weight_tune_csv": str(tune_path)},
     }
@@ -416,7 +434,7 @@ def main() -> int:
     if str(args.save_model).strip():
         model_path = Path(str(args.save_model))
         model_path.parent.mkdir(parents=True, exist_ok=True)
-        booster.save_model(str(model_path))
+        booster_full.save_model(str(model_path))
         meta_yaml = model_path.with_suffix(".meta.yaml")
         _write_yaml(
             meta_yaml,
@@ -430,6 +448,7 @@ def main() -> int:
                 "xgb_params": dict(params),
                 "num_boost_round": int(num_round),
                 "best_iteration": int(best_it),
+                "best_rounds_used": int(best_rounds),
                 "anchored": {
                     "train_start": str(args.train_start),
                     "holdout_start": str(args.holdout_start),
@@ -447,6 +466,8 @@ def main() -> int:
     print(f"meta={meta_path}")
     print(f"output={out_path}")
     print(f"weight_tune={tune_path}")
+    print(f"n_train={len(tr)} n_holdout={len(ho)} n_features={len(feats)}")
+    print(f"best_iteration={best_it} best_rounds_used={best_rounds} internal_eval_start={pd.to_datetime(eval_start_dt).strftime('%Y-%m-%d')}")
     print(f"best_w={best_w:.4f}")
     print(out_df[["name", "sharpe", "cum_return", "max_drawdown", "avg_turnover"]].sort_values("sharpe", ascending=False).to_string(index=False))
     return 0
