@@ -36,6 +36,32 @@ from minimal_gpu_tuner.tune_ranker_min import (  # noqa: E402
 )
 
 
+def _read_yaml(path: str) -> dict:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"yaml not found: {p}")
+    obj = yaml.safe_load(p.read_text(encoding="utf-8"))
+    if not isinstance(obj, dict):
+        raise ValueError(f"yaml must be a mapping: {p}")
+    return obj
+
+
+def _load_xgb_from_meta(meta_path: str) -> tuple[dict, int]:
+    """
+    Load xgboost.train params + num_boost_round from a saved model meta yaml.
+    Expected keys: xgb_params, num_boost_round (as written by our tuners).
+    """
+    m = _read_yaml(meta_path)
+    p = dict(m.get("xgb_params") or {})
+    n = int(m.get("num_boost_round") or 600)
+    # Normalize aliases
+    if "learning_rate" in p and "eta" not in p:
+        p["eta"] = float(p.pop("learning_rate"))
+    if "reg_lambda" in p and "lambda" not in p:
+        p["lambda"] = float(p.pop("reg_lambda"))
+    return p, n
+
+
 def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -185,6 +211,11 @@ def main() -> int:
     ap.add_argument("--lambda", dest="reg_lambda", type=float, default=5.0)
     ap.add_argument("--gamma", type=float, default=1.0)
     ap.add_argument("--num-boost-round", type=int, default=600)
+    ap.add_argument(
+        "--xgb-meta",
+        default="",
+        help="Optional: path to a saved model .meta.yaml containing xgb_params + num_boost_round. If set, overrides the CLI hyperparams.",
+    )
 
     ap.add_argument("--out", default="", help="Output CSV path (default: artifacts/logs/anchored_gpu_<ts>.csv)")
     ap.add_argument("--save-model", default="", help="If set, save the trained Booster to this .json path")
@@ -237,22 +268,33 @@ def main() -> int:
     dfit.set_group(g_fit)
     deval.set_group(g_eval)
 
-    params: Dict[str, Any] = {
-        "objective": "rank:pairwise",
-        "eval_metric": "ndcg@20",
-        "tree_method": "hist",
-        "device": "cuda",
-        "seed": int(args.seed),
-        "nthread": -1,
-        "max_depth": int(args.max_depth),
-        "min_child_weight": float(args.min_child_weight),
-        "subsample": float(args.subsample),
-        "colsample_bytree": float(args.colsample_bytree),
-        "eta": float(args.eta),
-        "lambda": float(args.reg_lambda),
-        "gamma": float(args.gamma),
-    }
-    num_round = int(args.num_boost_round)
+    # Hyperparams: either from meta yaml (preferred for apples-to-apples) or CLI defaults.
+    if str(args.xgb_meta).strip():
+        params, num_round = _load_xgb_from_meta(str(args.xgb_meta))
+        # Force GPU + seed if missing
+        params.setdefault("tree_method", "hist")
+        params.setdefault("device", "cuda")
+        params.setdefault("objective", "rank:pairwise")
+        params.setdefault("eval_metric", "ndcg@20")
+        params.setdefault("seed", int(args.seed))
+        params.setdefault("nthread", -1)
+    else:
+        params = {
+            "objective": "rank:pairwise",
+            "eval_metric": "ndcg@20",
+            "tree_method": "hist",
+            "device": "cuda",
+            "seed": int(args.seed),
+            "nthread": -1,
+            "max_depth": int(args.max_depth),
+            "min_child_weight": float(args.min_child_weight),
+            "subsample": float(args.subsample),
+            "colsample_bytree": float(args.colsample_bytree),
+            "eta": float(args.eta),
+            "lambda": float(args.reg_lambda),
+            "gamma": float(args.gamma),
+        }
+        num_round = int(args.num_boost_round)
 
     booster = xgb.train(
         params=params,
