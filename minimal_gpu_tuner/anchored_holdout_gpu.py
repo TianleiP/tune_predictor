@@ -216,6 +216,11 @@ def main() -> int:
         default="",
         help="Optional: path to a saved model .meta.yaml containing xgb_params + num_boost_round. If set, overrides the CLI hyperparams.",
     )
+    ap.add_argument(
+        "--force-cpu",
+        action="store_true",
+        help="If set, strip CUDA-only params loaded from --xgb-meta and force CPU training (device=cpu, tree_method=hist).",
+    )
 
     ap.add_argument("--out", default="", help="Output CSV path (default: artifacts/logs/anchored_gpu_<ts>.csv)")
     ap.add_argument("--save-model", default="", help="If set, save the trained Booster to this .json path")
@@ -295,6 +300,15 @@ def main() -> int:
             "gamma": float(args.gamma),
         }
         num_round = int(args.num_boost_round)
+
+    if bool(args.force_cpu):
+        # Make this script runnable on CPU-only machines even if the meta was tuned on GPU.
+        params["device"] = "cpu"
+        params["tree_method"] = "hist"
+        # Some metas may include gpu_id; remove it defensively.
+        for k in ["gpu_id", "predictor", "single_precision_histogram"]:
+            if k in params:
+                params.pop(k, None)
 
     booster = xgb.train(
         params=params,
