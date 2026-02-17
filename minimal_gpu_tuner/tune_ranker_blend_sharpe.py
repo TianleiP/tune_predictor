@@ -34,6 +34,28 @@ from minimal_gpu_tuner.tune_ranker_min import (  # noqa: E402
 )
 
 
+class DualLogger:
+    """Logger that writes to both stdout and a markdown file."""
+    
+    def __init__(self, md_path: Path):
+        self.md_path = md_path
+        self.stdout = sys.stdout
+        # Create the markdown file with header
+        md_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(f"# Training Log\n\n")
+            f.write(f"**Started at:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+            f.write("---\n\n")
+    
+    def print(self, message: str = ""):
+        """Print to both stdout and markdown file."""
+        # Print to terminal
+        print(message, file=self.stdout)
+        # Append to markdown file
+        with open(self.md_path, 'a', encoding='utf-8') as f:
+            f.write(message + "\n")
+
+
 def _atomic_write_text(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -210,6 +232,10 @@ def main() -> int:
     out_path = Path(args.out) if str(args.out).strip() else (Path("artifacts") / "logs" / f"tune_blend_sharpe_{ts}.csv")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path = out_path.with_suffix(".meta.json")
+    
+    # Create markdown log file
+    md_log_path = out_path.with_suffix(".log.md")
+    logger = DualLogger(md_log_path)
 
     meta = {
         "created_at": ts,
@@ -222,10 +248,21 @@ def main() -> int:
     }
     meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
 
-    print(f"meta={meta_path}")
-    print(f"dataset={ds_path} train={len(tr)} valid={len(va)} feats={len(feats)} target={tgt}")
-    print(f"topn={int(args.topn)} hold_days={int(args.hold_days)} cost_bps={float(args.cost_bps)} weights={weights}")
-    print(f"trials={len(combos)} grid_keys={list(grid.keys())}")
+    logger.print(f"## Configuration\n")
+    logger.print(f"- **Meta file:** `{meta_path}`")
+    logger.print(f"- **Dataset:** `{ds_path}`")
+    logger.print(f"- **Train samples:** {len(tr):,}")
+    logger.print(f"- **Valid samples:** {len(va):,}")
+    logger.print(f"- **Features:** {len(feats)}")
+    logger.print(f"- **Target:** `{tgt}`")
+    logger.print(f"- **Top N:** {int(args.topn)}")
+    logger.print(f"- **Hold days:** {int(args.hold_days)}")
+    logger.print(f"- **Cost (bps):** {float(args.cost_bps)}")
+    logger.print(f"- **Blend weights:** {weights}")
+    logger.print(f"- **Total trials:** {len(combos)}")
+    logger.print(f"- **Grid keys:** {list(grid.keys())}")
+    logger.print(f"\n---\n")
+    logger.print(f"## Training Progress\n")
 
     results: List[Dict[str, Any]] = []
     best: Optional[Dict[str, Any]] = None
@@ -360,7 +397,8 @@ def main() -> int:
                 best_saved = True
 
                 if args.stop_at_sharpe is not None and float(r["blend_sharpe"]) >= float(args.stop_at_sharpe):
-                    print(f"[early_stop] reached blend_sharpe={float(r['blend_sharpe']):.3f} >= {float(args.stop_at_sharpe):.3f}")
+                    msg = f"**[Early Stop]** Reached blend_sharpe={float(r['blend_sharpe']):.3f} >= {float(args.stop_at_sharpe):.3f}"
+                    logger.print(msg)
                     results.append(r)
                     break
 
@@ -372,26 +410,49 @@ def main() -> int:
 
         if i % 10 == 0 or i == 1 or i == len(combos):
             if best is not None:
-                print(
-                    f"[{i}/{len(combos)}] best_blend_sharpe={float(best['blend_sharpe']):.3f} "
-                    f"best_cum={float(best.get('blend_cum_return', float('nan'))):.3f} best_w={float(best.get('best_w', float('nan'))):.2f}"
+                msg = (
+                    f"**[{i}/{len(combos)}]** "
+                    f"best_blend_sharpe=**{float(best['blend_sharpe']):.3f}** | "
+                    f"best_cum={float(best.get('blend_cum_return', float('nan'))):.3f} | "
+                    f"best_w={float(best.get('best_w', float('nan'))):.2f}"
                 )
+                logger.print(msg)
             else:
-                print(f"[{i}/{len(combos)}] no_success_yet")
+                logger.print(f"**[{i}/{len(combos)}]** no_success_yet")
 
     pd.DataFrame(results).to_csv(out_path, index=False)
-    print(f"output={out_path}")
+    
+    logger.print(f"\n---\n")
+    logger.print(f"## Results\n")
+    logger.print(f"- **Output CSV:** `{out_path}`")
+    logger.print(f"- **Log file:** `{md_log_path}`")
+    
     if best is not None:
-        print("best_overrides=", best["overrides"])
-        print(
-            f"best_blend_sharpe={float(best['blend_sharpe']):.3f} best_cum_return={float(best.get('blend_cum_return', float('nan'))):.3f} best_w={float(best.get('best_w', float('nan'))):.2f}"
-        )
+        logger.print(f"\n### Best Trial Results\n")
+        logger.print(f"```json")
+        logger.print(best["overrides"])
+        logger.print(f"```\n")
+        logger.print(f"| Metric | Value |")
+        logger.print(f"|--------|-------|")
+        logger.print(f"| **Blend Sharpe** | **{float(best['blend_sharpe']):.3f}** |")
+        logger.print(f"| Cumulative Return | {float(best.get('blend_cum_return', float('nan'))):.3f} |")
+        logger.print(f"| Best Weight (w) | {float(best.get('best_w', float('nan'))):.2f} |")
+        logger.print(f"| Annualized Return | {float(best.get('blend_ann_return', float('nan'))):.3f} |")
+        logger.print(f"| Annualized Vol | {float(best.get('blend_ann_vol', float('nan'))):.3f} |")
+        logger.print(f"| Max Drawdown | {float(best.get('blend_max_drawdown', float('nan'))):.3f} |")
+        logger.print(f"| Avg Turnover | {float(best.get('blend_avg_turnover', float('nan'))):.3f} |")
+    
     if best_model_path is not None:
         if best_saved:
-            print(f"saved_best_model={best_model_path}")
-            print(f"saved_best_meta={best_model_path.with_suffix('.meta.yaml')}")
+            logger.print(f"\n### Saved Model\n")
+            logger.print(f"- **Model:** `{best_model_path}`")
+            logger.print(f"- **Meta:** `{best_model_path.with_suffix('.meta.yaml')}`")
         else:
-            print("saved_best_model=<none> (no successful trials)")
+            logger.print(f"\n**Warning:** No successful trials, best model not saved.")
+    
+    logger.print(f"\n---\n")
+    logger.print(f"**Completed at:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    
     return 0
 
 
